@@ -4,6 +4,9 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.s
 
+import math
+import re
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -113,6 +116,8 @@ def get_video(path, max_frames=49):
     vr = VideoReader(path)
     num_frames = len(vr)
     frame_count = min(max_frames, num_frames)
+    if frame_count != num_frames:
+        print(f"\nWarning: Video has {num_frames} frames, but only {frame_count} will be used.")
     # Uniformly sample frame indices
     frame_idx = np.linspace(0, num_frames - 1, frame_count, dtype=int)
     video = vr.get_batch(frame_idx).asnumpy()
@@ -863,8 +868,22 @@ def compute_vjepa_loss_sliding_window(video_tensor, encoder, target_encoder, pre
         loss = torch.mean(torch.stack(chunk_losses))
     elif mode == 'max':
         loss = torch.max(torch.stack(chunk_losses))
+    elif mode == 'median':
+        loss = torch.median(torch.stack(chunk_losses))
+    elif re.fullmatch(r"topk(\d+)", mode):
+        m = re.fullmatch(r"topk(\d+)", mode)
+        k = int(m.group(1))
+        loss = torch.topk(torch.stack(chunk_losses), k=k).values.mean()
+    elif re.fullmatch(r"topp(\d+)", mode):
+        m = re.fullmatch(r"topp(\d+)", mode)
+        p = int(m.group(1))
+        values = torch.stack(chunk_losses)
+        k = max(1, int(math.ceil((p / 100.0) * values.numel())))
+        loss = values.topk(k=k).values.mean()
     else:
-        raise ValueError(f"Unknown mode: {mode}. Use 'mean' or 'max'")
+        msg = f"Unknown mode: {mode}. Use 'mean', 'max', 'median', 'topk<number>', or 'topp<percentage>'"
+        print(msg)
+        raise ValueError(msg)
 
     print(f"video_tensor shape: {video_tensor.shape}")
     print(f"number of chunks: {len(chunk_losses)}")
