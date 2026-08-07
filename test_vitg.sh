@@ -13,10 +13,8 @@ WINDOW_SIZE="${WINDOW_SIZE:-16}"
 STRIDE="${STRIDE:-8}"
 CONTEXT_FRAMES="${CONTEXT_FRAMES:-8}"
 MODE="${MODE:-mean}"
-CONDA_EXE="${CONDA_EXE:-conda}"
-
-command -v "$CONDA_EXE" >/dev/null 2>&1 || {
-  echo "Error: conda was not found. Install Conda or set CONDA_EXE to its path." >&2
+command -v python >/dev/null 2>&1 || {
+  echo "Error: python was not found in PATH. Activate the target environment before running." >&2
   exit 1
 }
 
@@ -30,7 +28,7 @@ command -v "$CONDA_EXE" >/dev/null 2>&1 || {
   exit 1
 }
 
-"$CONDA_EXE" run --no-capture-output -n physics-eval python compute_wmreward.py \
+PYTHONUNBUFFERED=1 python -u compute_wmreward.py \
   --video_path "$VIDEO" \
   --model vitg \
   --window_size "$WINDOW_SIZE" \

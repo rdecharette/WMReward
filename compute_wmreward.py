@@ -164,6 +164,7 @@ def compute_multi_vjepa_surprise(
     max_videos = min(max_videos, len(videos_paths)) if max_videos != -1 else len(videos_paths)
     error = 0
     for i, video_path in enumerate(videos_paths):
+        video_path = str(video_path)
         if (i-error) >= max_videos:
             print(f"Reached maximum number of videos to process: {max_videos}. Stopping.")
             break
@@ -171,8 +172,8 @@ def compute_multi_vjepa_surprise(
         video_path = video_path
         # Retrieve the vjepa-ready video cache (256x256 at ~30 FPS)
         if not video_path.startswith("/cache/"):
-            video_path = video_path.replace("/nfs/data/workspaces/rdechare/codes/physics-eval/../physics-sim/output/sims/v4_bis/", "/nfs/data/workspaces/rdechare/codes/physics-eval/cache/datasets_vjepa-ready/newtphys/")
-            video_path = video_path.replace("/nfs/data/workspaces/rdechare/codes/physics-eval/datasets/", "/nfs/data/workspaces/rdechare/codes/physics-eval/cache/datasets_vjepa-ready/")
+            video_path = video_path.replace("./../physics-sim/output/sims/v4_bis/", "/nfs/data/workspaces/rdechare/codes/physics-eval/cache/datasets_vjepa-ready/newtphys/")
+            video_path = video_path.replace("./datasets/", "/nfs/data/workspaces/rdechare/codes/physics-eval/cache/datasets_vjepa-ready/")
         else:
             raise ValueError(f"Video path {video_path} does not contain '/datasets/' and cannot be cached. Need to implement the 256x256 conversion at approx 4 FPS")
         
@@ -256,8 +257,17 @@ def main():
 
     video_path = Path(args.video_path)
     if video_path.suffix.lower() == ".txt":
+        video_list_dir = video_path.parent
         with video_path.open("r", encoding="utf-8") as f:
-            videos_paths = [line.strip() for line in f if line.strip()]
+            videos_paths = []
+            for line in f:
+                entry = line.strip()
+                if not entry:
+                    continue
+                entry_path = Path(entry).expanduser()
+                if not entry_path.is_absolute():
+                    entry_path = (video_list_dir / entry_path).resolve()
+                videos_paths.append(str(entry_path))
 
         output_dir = video_path.parent / "output" / "surprise" / args.model / args.mode / f"mf-{args.max_frames}_w-{args.window_size}_c-{args.context_frames}_s-{args.stride}"
         output_dir.mkdir(parents=True, exist_ok=True)
