@@ -7,7 +7,7 @@ cd "$ROOT_DIR"
 
 # Override VIDEO to score a different file, for example:
 # VIDEO=/path/to/video.mp4 ./test_vith.sh
-VIDEO="${VIDEO:-../physics-sim/output/sims/v4_bis/dl3dv/random/5/c-1_no-5_d-10_s-dl3dv-all_models-hf-gso_MLP-10_smooth_h-10-40_seed-112_20260428_144954/_fps-25_render.mp4}"
+VIDEO="${VIDEO:-}"
 MAXFRAMES="${MAXFRAMES:-150}"
 WINDOW_SIZE="${WINDOW_SIZE:-16}"
 STRIDE="${STRIDE:-8}"

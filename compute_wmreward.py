@@ -12,14 +12,17 @@ Usage:
 """
 
 import argparse
+import os
 import builtins
 import copy
 import csv
 from functools import partial
 from pathlib import Path
+import random
 
 import torch
 import torchvision.transforms.functional as F
+from decord import VideoReader
 from torchvision.transforms.functional import resize
 
 from utils import (
@@ -66,6 +69,12 @@ def load_video_as_tensor(video_path, max_frames=49, img_size=256):
     return video_tensor.unsqueeze(0)
 
 
+def assert_video_is_30_fps(video_path: str) -> None:
+    fps = float(VideoReader(video_path).get_avg_fps())
+    if abs(fps - 30.0) > 1e-3:
+        raise ValueError(f"Expected 30 FPS, got {fps:.6f} for video: {video_path}")
+
+
 def compute_vjepa_surprise(
     video_path: str,
     model_name: str = "vitg",
@@ -86,6 +95,7 @@ def compute_vjepa_surprise(
     predictor = predictor.to(device).eval()
 
     print(f"Loading video: {video_path}")
+    assert_video_is_30_fps(video_path)
     video_tensor = load_video_as_tensor(video_path, max_frames=max_frames, img_size=img_size)
     video_tensor = video_tensor.to(device)
     print(f"Video tensor shape: {video_tensor.shape}")
@@ -128,7 +138,7 @@ def compute_multi_vjepa_surprise(
     output_path: str | None = None,
     force_recompute: bool = False,
     mode: str = "mean",
-    max_videos: int = -1
+    max_videos: int | None = None
 ):
     """Compute VJEPA surprise score for multiple videos."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -161,24 +171,32 @@ def compute_multi_vjepa_surprise(
                 csv.writer(output_file).writerow(["video", "surprise"])
 
     surprise_scores = {}
-    max_videos = min(max_videos, len(videos_paths)) if max_videos != -1 else len(videos_paths)
+
+    print("Shuffling video paths deterministically...")
+    VIDEO_PATHS_SHUFFLE_SEED = 42  # Important to remain the same as the path shuffling for surprises and other per-video metrics. 42 is the answer to life. Hence to the metrics.
+    random.Random(VIDEO_PATHS_SHUFFLE_SEED).shuffle(videos_paths)
+    if max_videos is None:
+        max_videos = len(videos_paths)
+    else:
+        print(f"Limiting to {max_videos} videos for evaluation.")
+    
+    # We do not cap the videos paths but rather process up to max_videos videos.
+    # This allows for skipping videos that are not decodable or have fewer frames than the window size.
+    
     error = 0
     for i, video_path in enumerate(videos_paths):
         video_path = str(video_path)
         if (i-error) >= max_videos:
             print(f"Reached maximum number of videos to process: {max_videos}. Stopping.")
             break
-        
-        video_path = video_path
-        # Retrieve the vjepa-ready video cache (256x256 at ~30 FPS)
-        if not video_path.startswith("/cache/"):
-            video_path = video_path.replace("./../physics-sim/output/sims/v4_bis/", "/nfs/data/workspaces/rdechare/codes/physics-eval/cache/datasets_vjepa-ready/newtphys/")
-            video_path = video_path.replace("./datasets/", "/nfs/data/workspaces/rdechare/codes/physics-eval/cache/datasets_vjepa-ready/")
-        else:
-            raise ValueError(f"Video path {video_path} does not contain '/datasets/' and cannot be cached. Need to implement the 256x256 conversion at approx 4 FPS")
-        
-        print(f"\nProcessing video {i + 1}/{len(videos_paths)}: {video_path}")
 
+        # Retrieve the vjepa-ready video cache (256p at ~30 FPS)
+        video_path = video_path.replace("/datasets/", "/cache/datasets_variants/256p_30fps/datasets/")
+        
+        print(f"\nProcessing video {i + 1 - error}/{min(len(videos_paths), max_videos)}: {video_path}")
+
+        assert_video_is_30_fps(video_path)
+        
         if not force_recompute and video_path in processed_videos:
             print(f"Skipping already processed video")
             continue
@@ -190,7 +208,7 @@ def compute_multi_vjepa_surprise(
             video_tensor = video_tensor.to(device)
             print(f"Video tensor shape: {video_tensor.shape}")
             if video_tensor.shape[2] < window_size:
-                print(f"Video has fewer frames ({video_tensor.shape[2]}) than window size ({window_size}); skipping.")
+                print(f"Warning: Video has fewer frames ({video_tensor.shape[2]}) than window size ({window_size}); skipping.")
                 error += 1
                 continue
 
@@ -245,6 +263,7 @@ def main():
     parser.add_argument("--window_size", type=int, default=16, help="Sliding window size")
     parser.add_argument("--context_frames", type=int, default=8, help="Context frames per window")
     parser.add_argument("--stride", type=int, default=8, help="Sliding window stride")
+    parser.add_argument("--eval_max", type=int, default=None, help="Maximum number of videos to process")
     parser.add_argument("--max_frames", type=int, default=49, help="Maximum number of frames to process")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument(
@@ -254,6 +273,10 @@ def main():
         help="Reduction mode used for sliding-window surprise (mean, max, or topK-mean)",
     )
     args = parser.parse_args()
+
+    if args.eval_max <= 0:
+        print("Setting eval_max to None to process all videos.")
+        args.eval_max = None
 
     video_path = Path(args.video_path)
     if video_path.suffix.lower() == ".txt":
@@ -266,17 +289,12 @@ def main():
                     continue
                 entry_path = Path(entry).expanduser()
                 if not entry_path.is_absolute():
-                    entry_path = (video_list_dir / entry_path).resolve()
+                    entry_path = Path(os.path.abspath(video_list_dir / entry_path))
                 videos_paths.append(str(entry_path))
 
         output_dir = video_path.parent / "output" / "surprise" / args.model / args.mode / f"mf-{args.max_frames}_w-{args.window_size}_c-{args.context_frames}_s-{args.stride}"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # output_name = (
-        #     f"{video_path.stem}_surprises_"
-        #     f"m-{args.mode}_mf-{args.max_frames}_"
-        #     f"w-{args.window_size}_c-{args.context_frames}_s-{args.stride}.txt"
-        # )
         output_name = (
             f"{video_path.stem}_surprises.txt"
         )
@@ -291,7 +309,7 @@ def main():
             max_frames=args.max_frames,
             output_path=str(output_dir / output_name),
             mode=args.mode,
-            max_videos=250
+            max_videos=args.eval_max
         )
     else:
         compute_vjepa_surprise(
